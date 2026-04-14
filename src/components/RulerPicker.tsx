@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Dimensions,
   StyleSheet,
@@ -156,6 +156,13 @@ export const RulerPicker = ({
   );
   const scrollPosition = useRef(new Animated.Value(0)).current;
 
+  const fractionDigitsWithDisplayMode = useMemo(() => {
+    if (displayMode === 'feet') {
+      return 1;
+    }
+    return fractionDigits;
+  }, [displayMode, fractionDigits]);
+
   const valueCallback: Animated.ValueListenerCallback = useCallback(
     ({ value }) => {
       const newStep = calculateCurrentValue(
@@ -165,7 +172,7 @@ export const RulerPicker = ({
         min,
         max,
         step,
-        fractionDigits
+        fractionDigitsWithDisplayMode
       );
 
       if (prevValue.current !== newStep) {
@@ -175,7 +182,7 @@ export const RulerPicker = ({
 
       prevValue.current = newStep;
     },
-    [fractionDigits, gapBetweenSteps, stepWidth, max, min, onValueChange, step]
+    [fractionDigitsWithDisplayMode, gapBetweenSteps, stepWidth, max, min, onValueChange, step]
   );
 
   useEffect(() => {
@@ -240,15 +247,59 @@ export const RulerPicker = ({
 
   const onMomentumScrollEnd = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const offset = event.nativeEvent.contentOffset.x || event.nativeEvent.contentOffset.y;
+      const rawIndex = Math.round(offset / (stepWidth + gapBetweenSteps));
+
+      const firstAvailableIndex = 0;
+      const lastAvailableIndex = itemAmount;
+
       const newStep = calculateCurrentValue(
-        event.nativeEvent.contentOffset.x || event.nativeEvent.contentOffset.y,
+        offset,
         stepWidth,
         gapBetweenSteps,
         min,
         max,
         step,
-        fractionDigits
+        fractionDigitsWithDisplayMode
       );
+
+      // Nếu dừng lại ở vùng ngoài min/max thì scroll về min hoặc max
+      // Sử dụng 2 bước: nhảy nhanh đến gần target, rồi animate mượt đoạn cuối
+      if (rawIndex < firstAvailableIndex || rawIndex > lastAvailableIndex) {
+        const targetIndex =
+          rawIndex < firstAvailableIndex ? firstAvailableIndex : lastAvailableIndex;
+        const targetOffset = targetIndex * (stepWidth + gapBetweenSteps);
+        const currentOffset = rawIndex * (stepWidth + gapBetweenSteps);
+        const distance = Math.abs(targetOffset - currentOffset);
+        const stepSize = stepWidth + gapBetweenSteps;
+
+        // Nếu khoảng cách lớn hơn 5 steps, nhảy nhanh đến gần target trước
+        const FAST_SCROLL_THRESHOLD = 5 * stepSize;
+        if (distance > FAST_SCROLL_THRESHOLD) {
+          // Nhảy instant đến vị trí cách target 3 steps
+          const nearTargetOffset =
+            rawIndex < firstAvailableIndex
+              ? targetOffset - 3 * stepSize // Đang ở bên trái min, nhảy đến min - 3
+              : targetOffset + 3 * stepSize; // Đang ở bên phải max, nhảy đến max + 3
+          listRef.current?.scrollToOffset({
+            offset: nearTargetOffset,
+            animated: false,
+          });
+          // Sau đó animate mượt đoạn cuối (chỉ 3 steps)
+          setTimeout(() => {
+            listRef.current?.scrollToOffset({
+              offset: targetOffset,
+              animated: true,
+            });
+          }, 16); // 1 frame delay để đảm bảo scroll instant đã hoàn thành
+        } else {
+          // Khoảng cách ngắn, animate bình thường
+          listRef.current?.scrollToOffset({
+            offset: targetOffset,
+            animated: true,
+          });
+        }
+      }
 
       if (prevMomentumValue.current !== newStep) {
         onValueChangeEnd?.(newStep);
@@ -257,15 +308,17 @@ export const RulerPicker = ({
       prevMomentumValue.current = newStep;
     },
     [
-      fractionDigits,
+      fractionDigitsWithDisplayMode,
       gapBetweenSteps,
       stepWidth,
       max,
       min,
       onValueChangeEnd,
       step,
+      itemAmount,
     ]
   );
+
   function onContentSizeChange() {
     const initialIndex = Math.floor((initialValue - min) / step);
     listRef.current?.scrollToOffset({
@@ -332,7 +385,7 @@ export const RulerPicker = ({
         >
           <TextInput
             ref={stepTextRef}
-            defaultValue={initialValue.toFixed(fractionDigits)}
+            defaultValue={initialValue.toFixed(fractionDigitsWithDisplayMode)}
             style={[
               {
                 lineHeight:
